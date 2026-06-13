@@ -35,7 +35,7 @@ banner() {
 
 # ----------------------------------------------------------------------------
 get_slack_channel() {
-  echo -e "${C_WARN}━━━ PASO 1 de 4: ID del canal de Slack ━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+  echo -e "${C_WARN}━━━ PASO 1 de 6: ID del canal de Slack ━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
   echo -e "  El ID del canal empieza con ${C_INFO}C${C_RESET} (ej: ${C_DIM}C0B8J56KF0T${C_RESET})"
   echo
   echo -e "  ${C_INFO}Cómo encontrarlo:${C_RESET}"
@@ -50,7 +50,7 @@ get_slack_channel() {
 
 # ----------------------------------------------------------------------------
 get_model() {
-  echo -e "${C_WARN}━━━ PASO 2 de 4: Modelo de IA en OpenRouter ━━━━━━━━━━━━━━━━${C_RESET}"
+  echo -e "${C_WARN}━━━ PASO 2 de 6: Modelo de IA en OpenRouter ━━━━━━━━━━━━━━━━${C_RESET}"
   echo -e "  Modelos gratuitos:"
   echo -e "    ${C_INFO}1)${C_RESET} deepseek/deepseek-chat-v3-0324:free  ${C_DIM}(recomendado)${C_RESET}"
   echo -e "    ${C_INFO}2)${C_RESET} google/gemma-3-27b-it:free"
@@ -71,7 +71,7 @@ get_model() {
 
 # ----------------------------------------------------------------------------
 get_system_prompt() {
-  echo -e "${C_WARN}━━━ PASO 3 de 4: System Prompt (personalidad de la IA) ━━━━━${C_RESET}"
+  echo -e "${C_WARN}━━━ PASO 3 de 6: System Prompt (personalidad de la IA) ━━━━━${C_RESET}"
   echo -e "  ${C_DIM}Enter para usar el prompt por defecto${C_RESET}"
   echo
   read -rp "  System prompt: " SYSTEM_PROMPT
@@ -84,7 +84,7 @@ get_system_prompt() {
 
 # ----------------------------------------------------------------------------
 get_workflow_name() {
-  echo -e "${C_WARN}━━━ PASO 4 de 4: Nombre del workflow ━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+  echo -e "${C_WARN}━━━ PASO 4 de 6: Nombre del workflow ━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
   echo -e "  ${C_DIM}Enter para usar 'texto en slack'${C_RESET}"
   echo
   read -rp "  Nombre: " WORKFLOW_NAME
@@ -94,30 +94,97 @@ get_workflow_name() {
 }
 
 # ----------------------------------------------------------------------------
+get_credential_ids() {
+  echo -e "${C_WARN}━━━ PASO 5 de 6: ID de la credencial de Slack ━━━━━━━━━━━━━━${C_RESET}"
+  echo -e "  ${C_INFO}Cómo encontrarlo:${C_RESET}"
+  echo -e "    1. En n8n ve a ${C_INFO}Credentials${C_RESET}"
+  echo -e "    2. Haz clic en tu credencial de Slack"
+  echo -e "    3. Mira la URL del navegador, el ID es el final:"
+  echo -e "       ${C_DIM}https://n8nkito.duckdns.org/home/credentials/${C_INFO}AbC123XyZ${C_RESET}"
+  echo -e "  ${C_DIM}Enter para dejar vacío y asignar manualmente después${C_RESET}"
+  echo
+  read -rp "  ID credencial Slack: " SLACK_CRED_ID
+  ok "Slack cred ID: ${SLACK_CRED_ID:-'(vacío, asignar manualmente)'}"
+  echo
+
+  echo -e "${C_WARN}━━━ PASO 6 de 6: ID de la credencial de OpenRouter ━━━━━━━━━${C_RESET}"
+  echo -e "  (Mismo procedimiento que el paso anterior, pero con OpenRouter)"
+  echo -e "  ${C_DIM}Enter para dejar vacío y asignar manualmente después${C_RESET}"
+  echo
+  read -rp "  ID credencial OpenRouter: " OPENROUTER_CRED_ID
+  ok "OpenRouter cred ID: ${OPENROUTER_CRED_ID:-'(vacío, asignar manualmente)'}"
+  echo
+}
+
+# ----------------------------------------------------------------------------
 generate_json() {
   info "Generando archivo ${OUTPUT_FILE}..."
 
   # Exportar variables para que python las lea sin problemas de escape
-  export SLACK_CHANNEL_ID MODEL SYSTEM_PROMPT WORKFLOW_NAME
+  export SLACK_CHANNEL_ID MODEL SYSTEM_PROMPT WORKFLOW_NAME SLACK_CRED_ID OPENROUTER_CRED_ID
 
   python3 - > "${OUTPUT_FILE}" <<'PYEOF'
 import json, os
 
+slack_cred_id = os.environ.get("SLACK_CRED_ID", "").strip()
+openrouter_cred_id = os.environ.get("OPENROUTER_CRED_ID", "").strip()
+
+slack_creds = {"slackApi": {"id": slack_cred_id, "name": "Slack account"}} if slack_cred_id else None
+openrouter_creds = {"openRouterApi": {"id": openrouter_cred_id, "name": "OpenRouter account"}} if openrouter_cred_id else None
+
+slack_trigger_node = {
+  "parameters": {
+    "triggerOn": "anyEvent",
+    "watchWholeWorkspace": True,
+    "downloadFiles": True
+  },
+  "id": "node-slack-trigger",
+  "name": "Slack Trigger",
+  "type": "n8n-nodes-base.slackTrigger",
+  "typeVersion": 1,
+  "position": [240, 300]
+}
+if slack_creds:
+    slack_trigger_node["credentials"] = slack_creds
+
+openrouter_node = {
+  "parameters": {
+    "model": os.environ["MODEL"],
+    "options": {}
+  },
+  "id": "node-openrouter",
+  "name": "OpenRouter Chat Model",
+  "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+  "typeVersion": 1,
+  "position": [680, 400]
+}
+if openrouter_creds:
+    openrouter_node["credentials"] = openrouter_creds
+
+slack_send_node = {
+  "parameters": {
+    "select": "channel",
+    "channelId": {
+      "value": os.environ["SLACK_CHANNEL_ID"],
+      "__rl": True,
+      "mode": "id"
+    },
+    "text": "={{ $json.output }}",
+    "otherOptions": {}
+  },
+  "id": "node-slack-send",
+  "name": "Enviar respuesta a Slack",
+  "type": "n8n-nodes-base.slack",
+  "typeVersion": 2.3,
+  "position": [900, 180]
+}
+if slack_creds:
+    slack_send_node["credentials"] = slack_creds
+
 workflow = {
   "name": os.environ["WORKFLOW_NAME"],
   "nodes": [
-    {
-      "parameters": {
-        "triggerOn": "anyEvent",
-        "watchWholeWorkspace": True,
-        "downloadFiles": True
-      },
-      "id": "node-slack-trigger",
-      "name": "Slack Trigger",
-      "type": "n8n-nodes-base.slackTrigger",
-      "typeVersion": 1,
-      "position": [240, 300]
-    },
+    slack_trigger_node,
     {
       "parameters": {
         "conditions": {
@@ -161,34 +228,8 @@ workflow = {
       "typeVersion": 1.7,
       "position": [680, 180]
     },
-    {
-      "parameters": {
-        "model": os.environ["MODEL"],
-        "options": {}
-      },
-      "id": "node-openrouter",
-      "name": "OpenRouter Chat Model",
-      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
-      "typeVersion": 1,
-      "position": [680, 400]
-    },
-    {
-      "parameters": {
-        "select": "channel",
-        "channelId": {
-          "value": os.environ["SLACK_CHANNEL_ID"],
-          "__rl": True,
-          "mode": "id"
-        },
-        "text": "={{ $json.output }}",
-        "otherOptions": {}
-      },
-      "id": "node-slack-send",
-      "name": "Enviar respuesta a Slack",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.3,
-      "position": [900, 180]
-    }
+    openrouter_node,
+    slack_send_node
   ],
   "connections": {
     "Slack Trigger": {
@@ -226,25 +267,34 @@ summary() {
   echo
   echo -e "  Archivo: ${C_INFO}$(pwd)/${OUTPUT_FILE}${C_RESET}"
   echo
+
+  if [[ -n "${SLACK_CRED_ID:-}" && -n "${OPENROUTER_CRED_ID:-}" ]]; then
+    echo -e "  ${C_OK}Credenciales pre-asignadas en el JSON.${C_RESET}"
+    echo -e "  Solo importas y haces clic en Publish."
+  else
+    echo -e "  ${C_WARN}Asignarás las credenciales manualmente después de importar.${C_RESET}"
+  fi
+  echo
   echo -e "  ${C_WARN}━━━ Cómo importar en n8n ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
   echo
   echo -e "  ${C_INFO}1.${C_RESET} Muestra el contenido para copiarlo:"
   echo -e "     ${C_DIM}cat ${OUTPUT_FILE}${C_RESET}"
   echo
   echo -e "  ${C_INFO}2.${C_RESET} En n8n (https://n8nkito.duckdns.org):"
-  echo -e "     • Ve a ${C_INFO}Workflows${C_RESET} → ${C_INFO}+ Add workflow${C_RESET} (crea uno vacío)"
-  echo -e "     • Clic en los ${C_INFO}···${C_RESET} (arriba a la derecha del canvas)"
-  echo -e "     • Selecciona ${C_INFO}Import from File${C_RESET} o ${C_INFO}Import from URL${C_RESET}"
-  echo -e "     • Pega o sube el JSON"
+  echo -e "     • Workflows → ${C_INFO}Create Workflow${C_RESET} (uno vacío)"
+  echo -e "     • Pega el JSON directo sobre el canvas (Ctrl+V)"
+  echo -e "     • O usa los ${C_INFO}···${C_RESET} arriba a la derecha → ${C_INFO}Import from File${C_RESET}"
   echo
-  echo -e "  ${C_INFO}3.${C_RESET} Asigna las credenciales (clic en cada nodo):"
-  echo -e "     • ${C_INFO}Slack Trigger${C_RESET}            → credencial Slack"
-  echo -e "     • ${C_INFO}OpenRouter Chat Model${C_RESET}    → credencial OpenRouter"
-  echo -e "     • ${C_INFO}Enviar respuesta a Slack${C_RESET} → credencial Slack"
+  if [[ -z "${SLACK_CRED_ID:-}" || -z "${OPENROUTER_CRED_ID:-}" ]]; then
+    echo -e "  ${C_INFO}3.${C_RESET} Asigna las credenciales (clic en cada nodo):"
+    echo -e "     • ${C_INFO}Slack Trigger${C_RESET}, ${C_INFO}OpenRouter Chat Model${C_RESET}, ${C_INFO}Enviar respuesta a Slack${C_RESET}"
+    echo
+    echo -e "  ${C_INFO}4.${C_RESET} Clic en ${C_INFO}Publish${C_RESET} (arriba a la derecha)"
+  else
+    echo -e "  ${C_INFO}3.${C_RESET} Clic en ${C_INFO}Publish${C_RESET} (arriba a la derecha)"
+  fi
   echo
-  echo -e "  ${C_INFO}4.${C_RESET} Clic en ${C_INFO}Publish${C_RESET} (arriba a la derecha)"
-  echo
-  echo -e "  ${C_INFO}5.${C_RESET} Escribe un mensaje en Slack y verifica la respuesta de la IA"
+  echo -e "  ${C_INFO}Prueba:${C_RESET} Escribe un mensaje en Slack y verifica la respuesta."
   echo
   echo -e "  ${C_OK}Estructura:${C_RESET} Slack Trigger → Anti-Bucle → AI Agent → Slack"
   echo
@@ -256,6 +306,7 @@ main() {
   get_model
   get_system_prompt
   get_workflow_name
+  get_credential_ids
   generate_json
   summary
 }
